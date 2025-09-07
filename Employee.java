@@ -1,26 +1,42 @@
-package com.day2.lab1;
+package com.day5.lab1;
 
-public class Employee implements Role{
+public class Employee {
+	private String name;
+    private String department;
+    private int performanceScore; // range 0 - 100
+    private int yearsOfExperience;
 
-	private static final String ROLE_NAME = "Employee";
+    public Employee(String name, String department, int performanceScore, int yearsOfExperience) {
+        this.name = name;
+        this.department = department;
+        this.performanceScore = performanceScore;
+        this.yearsOfExperience = yearsOfExperience;
+    }
 
-    @Override
-    public void accessResource(String resource) {
-        if (canAccess(resource)) {
-            System.out.println(ROLE_NAME + " access to '" + resource + "': GRANTED");
-        } else {
-            System.out.println(ROLE_NAME + " access to '" + resource + "': DENIED");
-        }
+    // Getters
+    public String getName() {
+        return name;
+    }
+
+    public String getDepartment() {
+        return department;
+    }
+
+    public int getPerformanceScore() {
+        return performanceScore;
+    }
+
+    public int getYearsOfExperience() {
+        return yearsOfExperience;
     }
 
     @Override
-    public boolean canAccess(String resource) {
-        
-        return "team-data".equalsIgnoreCase(resource);
-    }
-
-    @Override
-    public String getRoleName() {
-        return ROLE_NAME;
+    public String toString() {
+        return "Employee{" +
+               "name='" + name + '\'' +
+               ", department='" + department + '\'' +
+               ", performanceScore=" + performanceScore +
+               ", yearsOfExperience=" + yearsOfExperience +
+               '}';
     }
 }
