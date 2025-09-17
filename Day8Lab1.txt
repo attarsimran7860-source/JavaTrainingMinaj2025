@@ -1,0 +1,156 @@
+#!/bin/bash
+
+# This script is a Git pre-commit hook that enforces semantic version bumping
+# based on the commit message. It reads the current version from pom.xml,
+# updates it, stages the change, and then allows the commit to proceed.
+
+# --- Configuration ---
+POM_PATH="pom.xml" # Path to your pom.xml relative to the Git repository root
+VERSION_XPATH="/project/version" # XPath to the version element in pom.xml
+
+# --- Helper Functions ---
+
+# Function to extract the current version using xmllint
+get_current_version() {
+  if [ ! -f "$POM_PATH" ]; then
+    echo "Error: pom.xml not found at $POM_PATH." >&2
+    exit 1
+  fi
+
+  # Use xmllint to extract the version. Ensure xmllint is installed (`sudo apt-get install libxml2-utils` on Debian/Ubuntu)
+  version=$(xmllint --xpath "string($VERSION_XPATH)" "$POM_PATH" 2>/dev/null)
+  if [ -z "$version" ]; then
+    echo "Error: Could not extract version from $POM_PATH using XPath '$VERSION_XPATH'. Please check the XML structure or xmllint installation." >&2
+    exit 1
+  fi
+  echo "$version"
+}
+
+# Function to bump the version
+# Args: current_version, bump_type (major, minor, patch)
+bump_version() {
+  local current_version="$1"
+  local bump_type="$2"
+
+  IFS='.' read -r major minor patch <<< "$current_version"
+
+  case "$bump_type" in
+    major)
+      major=$((major + 1))
+      minor=0
+      patch=0
+      ;;
+    minor)
+      minor=$((minor + 1))
+      patch=0
+      ;;
+    patch)
+      patch=$((patch + 1))
+      ;;
+    *)
+      # Fallback to patch if something unexpected happens
+      patch=$((patch + 1))
+      ;;
+  esac
+  echo "$major.$minor.$patch"
+}
+
+# Function to update the pom.xml with the new version using sed
+update_pom_xml() {
+  local new_version="$1"
+  local current_version_escaped=$(echo "$2" | sed 's/\./\\./g') # Escape dots for sed regex
+
+  # Use a temporary file for atomic update
+  # The `s/^.*<version>.*<\/version>.*$/   <version>NEW_VERSION<\/version>/`
+  # pattern for sed might be too greedy or specific depending on actual pom.xml formatting.
+  # A more robust approach would be to parse XML directly if available,
+  # or use a placeholder replacement if the version is consistently on its own line like this:
+  # <version>1.0.0</version>
+  #
+  # For basic cases, this `sed` approach works by finding the line containing `<version>...</version>`
+  # and replacing the content within the tags.
+
+  # This sed command assumes the version tag is on its own line or at least
+  # the old_version string is specific enough.
+  # It targets the `<version>` tag and replaces its content directly.
+  # It's crucial that `old_version` is present in the line for this to work accurately.
+  sed -i.bak "s|<version>$current_version_escaped</version>|<version>$new_version</version>|g" "$POM_PATH"
+
+  if [ $? -ne 0 ]; then
+    echo "Error: Failed to update version in $POM_PATH." >&2
+    return 1
+  fi
+
+  # Clean up the backup file created by sed -i.bak
+  rm -f "$POM_PATH.bak"
+  return 0
+}
+
+# --- Main Hook Logic ---
+
+echo "--- Running pre-commit hook: Semantic Version Bumper ---"
+
+# 1. Get the commit message
+# We need to read it from .git/COMMIT_EDITMSG directly as it's not yet finalized.
+COMMIT_MSG_FILE=$(git rev-parse --git-dir)/COMMIT_EDITMSG
+if [ ! -f "$COMMIT_MSG_FILE" ]; then
+    echo "Error: Git COMMIT_EDITMSG file not found. Cannot determine commit message." >&2
+    exit 1
+fi
+COMMIT_MESSAGE=$(cat "$COMMIT_MSG_FILE")
+
+echo "Commit message: '$COMMIT_MESSAGE'"
+
+# Determine bump type
+BUMP_TYPE="patch" # Default to patch
+if [[ "$COMMIT_MESSAGE" == *"#major"* ]]; then
+  BUMP_TYPE="major"
+elif [[ "$COMMIT_MESSAGE" == *"#minor"* ]]; then
+  BUMP_TYPE="minor"
+fi
+
+echo "Determined bump type: $BUMP_TYPE"
+
+# 2. Get current version
+current_version=$(get_current_version)
+if [ $? -ne 0 ]; then
+  exit 1 # Exit on error from get_current_version
+fi
+echo "Current version: $current_version"
+
+# 3. Calculate new version
+new_version=$(bump_version "$current_version" "$BUMP_TYPE")
+echo "New version proposed: $new_version"
+
+# Check if version actually needs bumping (e.g., if current_version is malformed or already bumped)
+if [ "$current_version" == "$new_version" ] && [ "$BUMP_TYPE" == "patch" ]; then
+    # This might happen if the current version is something like "1.0.0" and it's a patch bump,
+    # but the logic for bumping 0.0.0 could also result in 0.0.0 if not careful.
+    # It's safer to always bump unless there's a specific reason not to.
+    # For simplicity, we'll proceed with the update unless it's literally identical
+    # and not requested to be anything other than a patch bump.
+    echo "Warning: Calculated new version ($new_version) is identical to current version ($current_version). Assuming patch bump is required."
+fi
+
+
+# 4. Update pom.xml
+echo "Updating $POM_PATH with new version: $new_version"
+if ! update_pom_xml "$new_version" "$current_version"; then
+  echo "Error: Version update process failed. Aborting commit." >&2
+  exit 1
+fi
+
+# 5. Stage the changes
+echo "Staging $POM_PATH..."
+git add "$POM_PATH"
+
+if [ $? -ne 0 ]; then
+  echo "Error: Failed to stage $POM_PATH. Aborting commit." >&2
+  # Revert pom.xml if staging fails and it was modified
+  git restore --staged "$POM_PATH" 2>/dev/null # Unstage if it somehow got staged
+  git checkout "$POM_PATH" >/dev/null 2>&1 # Revert file to original state
+  exit 1
+fi
+
+echo "--- Pre-commit hook finished successfully. Commit allowed. ---"
+exit 0 # Allow the commit to proceed
